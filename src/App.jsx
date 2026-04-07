@@ -1106,10 +1106,25 @@ function VaultPage({ data, setData, onNavigate }) {
 /* ─── Dashboard Page ─── */
 function DashboardPage({ data, onNavigate }) {
   const policies = data.documents.filter(d => d.type === "policy");
+  const analyzedPolicies = policies.filter(d => d.status === "analyzed");
   const pendingAnalysis = policies.filter(d => d.status === "pending_analysis");
   const totalItems = data.inventory.length;
   const totalValue = data.inventory.reduce((sum, item) => sum + (item.estimatedValue || 0), 0);
+  const receipts = data.documents.filter(d => d.type === "receipt");
+  const photos = data.documents.filter(d => d.type === "photo");
+  const linkedReceipts = data.inventory.filter(i => i.receiptId).length;
   const upcomingEvents = data.calendarEvents.filter(e => new Date(e.eventDate) > new Date()).sort((a, b) => new Date(a.eventDate) - new Date(b.eventDate)).slice(0, 5);
+
+  const roomGroups = {};
+  data.inventory.forEach(item => { if (!roomGroups[item.room]) roomGroups[item.room] = { count: 0, value: 0 }; roomGroups[item.room].count++; roomGroups[item.room].value += (item.estimatedValue || 0); });
+  const topRooms = Object.entries(roomGroups).sort((a, b) => b[1].value - a[1].value).slice(0, 6);
+  const maxRoomValue = topRooms.length ? topRooms[0][1].value : 0;
+
+  const catGroups = {};
+  data.inventory.forEach(item => { if (!catGroups[item.category]) catGroups[item.category] = { count: 0, value: 0 }; catGroups[item.category].count++; catGroups[item.category].value += (item.estimatedValue || 0); });
+  const topCats = Object.entries(catGroups).sort((a, b) => b[1].value - a[1].value).slice(0, 5);
+
+  const barColors = ["var(--accent)", "var(--warning)", "#6b5ce7", "var(--danger)", "var(--text-secondary)", "var(--success)"];
 
   return (
     <div>
@@ -1118,7 +1133,6 @@ function DashboardPage({ data, onNavigate }) {
         <p style={{ margin: "6px 0 0", fontSize: 15, color: "var(--text-secondary)" }}>Your insurance policy interpreter and property documentation vault</p>
       </div>
 
-      {/* API key reminder */}
       {!getApiKey() && (
         <div style={{ padding: "14px 18px", borderRadius: 12, background: "var(--warning-light)", border: "1.5px solid var(--warning)", marginBottom: "1.5rem", display: "flex", alignItems: "center", gap: 12 }}>
           <Icon name="alert" />
@@ -1126,44 +1140,76 @@ function DashboardPage({ data, onNavigate }) {
             <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>API key needed</p>
             <p style={{ margin: "2px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>Add your Anthropic API key in Settings to enable AI policy analysis.</p>
           </div>
-          <button onClick={() => onNavigate("settings")} style={{
-            padding: "8px 16px", borderRadius: 8, background: "var(--accent)", color: "#fff",
-            border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
-          }}>Settings</button>
+          <button onClick={() => onNavigate("settings")} style={{ padding: "8px 16px", borderRadius: 8, background: "var(--accent)", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>Settings</button>
         </div>
       )}
 
-      {/* Quick stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: "2rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginBottom: "2rem" }}>
         {[
-          { label: "Policies uploaded", value: policies.length, icon: "shield", color: "var(--accent)" },
-          { label: "Awaiting analysis", value: pendingAnalysis.length, icon: "alert", color: "var(--warning)" },
-          { label: "Inventory items", value: totalItems, icon: "box", color: "var(--success)" },
-          { label: "Estimated value", value: `$${totalValue.toLocaleString()}`, icon: "clipboard", color: "var(--text-primary)" },
+          { label: "Policies", value: policies.length, sub: analyzedPolicies.length + " analyzed", icon: "shield", color: "var(--accent)" },
+          { label: "Documents", value: data.documents.length, sub: receipts.length + " receipts, " + photos.length + " photos", icon: "folder", color: "var(--text-secondary)" },
+          { label: "Inventory", value: totalItems, sub: linkedReceipts + " with receipts", icon: "box", color: "var(--success)" },
+          { label: "Total value", value: "$" + totalValue.toLocaleString(), sub: Object.keys(roomGroups).length + " rooms", icon: "dollar", color: "var(--accent)" },
+          { label: "Deadlines", value: upcomingEvents.length, sub: "upcoming", icon: "calendar", color: "var(--warning)" },
         ].map(s => (
-          <div key={s.label} style={{ background: "var(--bg-secondary)", borderRadius: 14, padding: "1.25rem" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, color: s.color }}><Icon name={s.icon} /><span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: 0.5 }}>{s.label}</span></div>
-            <p style={{ margin: 0, fontSize: 28, fontWeight: 700, color: "var(--text-primary)" }}>{s.value}</p>
+          <div key={s.label} style={{ background: "var(--bg-secondary)", borderRadius: 14, padding: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, color: s.color }}><Icon name={s.icon} size={16} /><span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: 0.5 }}>{s.label}</span></div>
+            <p style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--text-primary)" }}>{s.value}</p>
+            <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--text-tertiary)" }}>{s.sub}</p>
           </div>
         ))}
       </div>
 
-      {/* Quick actions */}
+      {topRooms.length > 0 && (
+        <div style={{ marginBottom: "2rem" }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 1rem" }}>Inventory by room</h2>
+          <div style={{ background: "var(--bg-primary)", border: "1.5px solid var(--border)", borderRadius: 14, padding: "1.25rem" }}>
+            {topRooms.map(([room, info], i) => (
+              <div key={room} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: i < topRooms.length - 1 ? 12 : 0 }}>
+                <span style={{ fontSize: 13, color: "var(--text-secondary)", width: 120, flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{room}</span>
+                <div style={{ flex: 1, height: 24, background: "var(--bg-secondary)", borderRadius: 6, overflow: "hidden", position: "relative" }}>
+                  <div style={{ height: "100%", width: maxRoomValue > 0 ? Math.max(4, (info.value / maxRoomValue) * 100) + "%" : "4%", background: barColors[i % barColors.length], borderRadius: 6, transition: "width 0.5s ease", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8, minWidth: 40 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#fff" }}>${info.value.toLocaleString()}</span>
+                  </div>
+                </div>
+                <span style={{ fontSize: 11, color: "var(--text-tertiary)", width: 50, textAlign: "right", flexShrink: 0 }}>{info.count} items</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {topCats.length > 0 && (
+        <div style={{ marginBottom: "2rem" }}>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 1rem" }}>Value by category</h2>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {topCats.map(([cat, info], i) => (
+              <div key={cat} style={{ background: "var(--bg-primary)", border: "1.5px solid var(--border)", borderRadius: 12, padding: "12px 16px", flex: "1 1 140px", minWidth: 140 }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>{cat}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, color: barColors[i % barColors.length] }}>${info.value.toLocaleString()}</p>
+                <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--text-tertiary)" }}>{info.count} item{info.count !== 1 ? "s" : ""}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 1rem" }}>Quick actions</h2>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: "2rem" }}>
         {[
-          { label: "Upload a policy", desc: "Add an insurance policy for AI analysis", icon: "upload", page: "vault" },
-          { label: "View inventory", desc: "Manage your property documentation", icon: "box", page: "inventory" },
-          { label: "Check deadlines", desc: "Review upcoming dates and obligations", icon: "calendar", page: "calendar" },
+          { label: "Upload a policy", desc: "Add an insurance policy for AI analysis", icon: "upload", page: "vault", accent: false },
+          { label: "View inventory", desc: "Manage your property documentation", icon: "box", page: "inventory", accent: false },
+          { label: "Search everything", desc: "Find info across all your data", icon: "search", page: "searchAll", accent: false },
+          { label: "Disaster mode", desc: "Document a loss step by step", icon: "alert", page: "disaster", accent: true },
         ].map(a => (
           <button key={a.label} onClick={() => onNavigate(a.page)} style={{
-            background: "var(--bg-primary)", border: "1.5px solid var(--border)", borderRadius: 14, padding: "1.25rem",
+            background: a.accent ? "var(--danger-light)" : "var(--bg-primary)", border: "1.5px solid " + (a.accent ? "var(--danger)" : "var(--border)"), borderRadius: 14, padding: "1.25rem",
             cursor: "pointer", textAlign: "left", display: "flex", gap: 14, alignItems: "flex-start", transition: "all 0.2s",
           }}
-          onMouseEnter={e => e.currentTarget.style.borderColor = "var(--accent)"}
-          onMouseLeave={e => e.currentTarget.style.borderColor = "var(--border)"}
+          onMouseEnter={e => e.currentTarget.style.borderColor = a.accent ? "var(--danger)" : "var(--accent)"}
+          onMouseLeave={e => e.currentTarget.style.borderColor = a.accent ? "var(--danger)" : "var(--border)"}
           >
-            <div style={{ color: "var(--accent)", marginTop: 2 }}><Icon name={a.icon} /></div>
+            <div style={{ color: a.accent ? "var(--danger)" : "var(--accent)", marginTop: 2 }}><Icon name={a.icon} /></div>
             <div>
               <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>{a.label}</p>
               <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-tertiary)" }}>{a.desc}</p>
@@ -1172,7 +1218,6 @@ function DashboardPage({ data, onNavigate }) {
         ))}
       </div>
 
-      {/* Pending policies */}
       {pendingAnalysis.length > 0 && (
         <>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 1rem" }}>Policies ready for analysis</h2>
@@ -1186,7 +1231,7 @@ function DashboardPage({ data, onNavigate }) {
                 <Icon name="shield" />
                 <div style={{ flex: 1 }}>
                   <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{doc.label}</p>
-                  <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>Uploaded {formatDate(doc.uploadedAt)} \u00b7 Click to analyze</p>
+                  <p style={{ margin: "2px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>Uploaded {formatDate(doc.uploadedAt)}</p>
                 </div>
                 <Icon name="chevron" />
               </button>
@@ -1195,13 +1240,12 @@ function DashboardPage({ data, onNavigate }) {
         </>
       )}
 
-      {/* Upcoming deadlines */}
       {upcomingEvents.length > 0 && (
         <>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 1rem" }}>Upcoming deadlines</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {upcomingEvents.map(ev => (
-              <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "var(--bg-secondary)", borderRadius: 12 }}>
+              <div key={ev.id} onClick={() => onNavigate("calendar")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "var(--bg-secondary)", borderRadius: 12, cursor: "pointer" }}>
                 <Icon name="calendar" />
                 <div style={{ flex: 1 }}>
                   <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{ev.title}</p>
@@ -1246,12 +1290,14 @@ function InventoryPage({ data, setData }) {
   const [formSerial, setFormSerial] = useState("");
   const [formNotes, setFormNotes] = useState("");
   const [formPhoto, setFormPhoto] = useState(null);
+  const [formReceiptId, setFormReceiptId] = useState("");
   const photoRef = useRef(null);
+  const receipts = data.documents.filter(d => d.type === "receipt");
 
   const resetForm = () => {
     setFormName(""); setFormRoom("Living room"); setFormCategory("Electronics");
     setFormValue(""); setFormPurchasePrice(""); setFormPurchaseDate("");
-    setFormSerial(""); setFormNotes(""); setFormPhoto(null);
+    setFormSerial(""); setFormNotes(""); setFormPhoto(null); setFormReceiptId("");
   };
 
   const openEdit = (item) => {
@@ -1259,7 +1305,7 @@ function InventoryPage({ data, setData }) {
     setFormName(item.name); setFormRoom(item.room); setFormCategory(item.category);
     setFormValue(item.estimatedValue?.toString() || ""); setFormPurchasePrice(item.purchasePrice?.toString() || "");
     setFormPurchaseDate(item.purchaseDate || ""); setFormSerial(item.serialNumber || "");
-    setFormNotes(item.notes || ""); setFormPhoto(item.photo || null);
+    setFormNotes(item.notes || ""); setFormPhoto(item.photo || null); setFormReceiptId(item.receiptId || "");
     setShowAdd(true);
   };
 
@@ -1282,7 +1328,7 @@ function InventoryPage({ data, setData }) {
       purchaseDate: formPurchaseDate,
       serialNumber: formSerial.trim(),
       notes: formNotes.trim(),
-      photo: formPhoto,
+      photo: formPhoto, receiptId: formReceiptId || null,
       createdAt: editItem ? editItem.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1563,6 +1609,7 @@ function InventoryPage({ data, setData }) {
             </div>
 
             {/* Notes */}
+            {receipts.length > 0 && <div style={{ marginBottom: "1rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Link a receipt</label><select value={formReceiptId} onChange={e => setFormReceiptId(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none" }}><option value="">No receipt</option>{receipts.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</select></div>}
             <div style={{ marginBottom: "1.5rem" }}>
               <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Notes</label>
               <textarea value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Condition, brand, model, etc."
@@ -2300,6 +2347,9 @@ export default function App() {
     { id: "analyzer", label: "Policy analyzer", icon: "search" },
     { id: "inventory", label: "Property inventory", icon: "box" },
     { id: "calendar", label: "Compliance calendar", icon: "calendar" },
+    { id: "searchAll", label: "Search everything", icon: "search" },
+    { id: "reports", label: "Claim reports", icon: "clipboard" },
+    { id: "disaster", label: "Disaster mode", icon: "alert" },
     { id: "settings", label: "Settings", icon: "wrench" },
   ];
 
@@ -2310,6 +2360,9 @@ export default function App() {
       case "analyzer": return <AnalyzerPage data={data} setData={setData} pageArg={pageArg} onNavigate={navigate} />;
       case "inventory": return <InventoryPage data={data} setData={setData} />;
       case "calendar": return <CalendarPage data={data} setData={setData} />;
+      case "searchAll": return <SearchPage data={data} />;
+      case "reports": return <ClaimReportPage data={data} />;
+      case "disaster": return <DisasterModePage data={data} setData={setData} onNavigate={navigate} />;
       case "settings": return <SettingsPage />;
       default: return <DashboardPage data={data} onNavigate={navigate} />;
     }
