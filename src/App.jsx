@@ -2009,6 +2009,46 @@ function generateICS(events) {
 }
 
 function CalendarPage({ data, setData }) {
+  const [showDeadlines, setShowDeadlines] = useState(false);
+  const COMMON_DEADLINES = [
+    { title: "Homeowners policy renewal review", eventType: "renewal", daysFromNow: 30, notes: "Review your homeowners policy before renewal. Compare rates and coverage." },
+    { title: "Update home inventory", eventType: "maintenance", daysFromNow: 90, notes: "Walk through your home and update your property inventory with any new purchases or changes." },
+    { title: "Test smoke detectors and safety equipment", eventType: "maintenance", daysFromNow: 60, notes: "Test all smoke detectors, carbon monoxide detectors, and fire extinguishers." },
+    { title: "Review auto policy coverage limits", eventType: "renewal", daysFromNow: 45, notes: "Check if your auto coverage limits still match your needs." },
+    { title: "Document home improvements for insurance", eventType: "maintenance", daysFromNow: 14, notes: "Photograph and document any recent home improvements that may affect your coverage or home value." },
+    { title: "Check flood insurance eligibility", eventType: "deadline", daysFromNow: 30, notes: "Standard homeowners policies do not cover flood damage. Check if you need separate flood insurance." },
+    { title: "Review umbrella policy needs", eventType: "renewal", daysFromNow: 60, notes: "Assess whether your liability coverage is sufficient or if you need an umbrella policy." },
+    { title: "Verify emergency contact info with insurer", eventType: "maintenance", daysFromNow: 7, notes: "Make sure your insurance company has your current phone number, email, and emergency contacts." },
+    { title: "Back up important documents", eventType: "maintenance", daysFromNow: 14, notes: "Ensure digital copies of your policy, inventory, and receipts are backed up securely." },
+    { title: "Hurricane season preparation (Jun 1 - Nov 30)", eventType: "deadline", monthDay: "06-01", notes: "Atlantic hurricane season. Review your coverage, document property, and prepare an emergency kit." },
+    { title: "Winter storm preparation", eventType: "deadline", monthDay: "11-01", notes: "Check coverage for frozen pipes, ice damage, and roof collapse. Prepare your property." },
+    { title: "Tax season - gather insurance documents", eventType: "deadline", monthDay: "03-01", notes: "Collect insurance premium statements and any claim documentation for tax filing." },
+  ];
+
+  const addCommonDeadline = (deadline) => {
+    const now = new Date();
+    let dateStr;
+    if (deadline.monthDay) {
+      dateStr = now.getFullYear() + "-" + deadline.monthDay;
+      if (new Date(dateStr) < now) dateStr = (now.getFullYear() + 1) + "-" + deadline.monthDay;
+    } else {
+      const d = new Date(now); d.setDate(d.getDate() + deadline.daysFromNow);
+      dateStr = d.toISOString().split("T")[0];
+    }
+    const exists = data.calendarEvents.some(e => e.title === deadline.title);
+    if (exists) return false;
+    const ev = { id: Date.now() + "_" + Math.random().toString(36).slice(2, 8), title: deadline.title, eventType: deadline.eventType, eventDate: dateStr, reminderDays: 7, notes: deadline.notes, sourceDocument: "PolicyGuard common deadlines", createdAt: new Date().toISOString() };
+    const next = { ...data, calendarEvents: [...data.calendarEvents, ev] };
+    setData(next); saveData(next);
+    return true;
+  };
+
+  const addAllCommonDeadlines = () => {
+    let added = 0;
+    COMMON_DEADLINES.forEach(d => { if (addCommonDeadline(d)) added++; });
+    setShowDeadlines(false);
+    return added;
+  };
   const [showAdd, setShowAdd] = useState(false);
   const [editEvent, setEditEvent] = useState(null);
   const [view, setView] = useState("upcoming"); // upcoming | month | all
