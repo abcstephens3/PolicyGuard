@@ -258,6 +258,28 @@ Focus on being helpful to someone who might be filing a claim. Define insurance 
 }
 
 /* ─── Ask a question about the policy ─── */
+async function analyzeImage(base64Data, mimeType) {
+  const apiKey = localStorage.getItem("policyguard_api_key") || "";
+  if (!apiKey) return null;
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 1000,
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: mimeType || "image/jpeg", data: base64Data } },
+          { type: "text", text: "Analyze this image for a home inventory system. Return ONLY raw JSON (no markdown, no backticks):\n{\n  \"itemName\": \"what the item is\",\n  \"category\": \"one of: Electronics, Furniture, Appliances, Clothing, Jewelry, Tools, Sports equipment, Musical instruments, Art / Collectibles, Kitchenware, Bedding / Linens, Toys / Games, Other\",\n  \"estimatedValue\": number (current market value in USD, your best estimate),\n  \"condition\": \"new/good/fair/poor/damaged\",\n  \"damageDetected\": true or false,\n  \"damageDescription\": \"description of any damage seen, or empty string\",\n  \"description\": \"brief description including brand/model if visible\"\n}" }
+        ]}],
+      }),
+    });
+    if (!response.ok) return null;
+    const result = await response.json();
+    const text = result.content.map(c => c.text || "").join("");
+    return JSON.parse(text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim());
+  } catch (e) { console.error("Image analysis failed:", e); return null; }
+}
+
 async function askPolicyQuestion(base64Data, mimeType, question, analysisJson) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error("API key not set.");
@@ -1293,6 +1315,8 @@ function InventoryPage({ data, setData }) {
   const [formPhoto, setFormPhoto] = useState(null);
   const [formReceiptId, setFormReceiptId] = useState("");
   const photoRef = useRef(null);
+  const [photoAnalyzing, setPhotoAnalyzing] = useState(false);
+  const [photoSuggestion, setPhotoSuggestion] = useState(null);
   const receipts = data.documents.filter(d => d.type === "receipt");
 
   const resetForm = () => {
@@ -1315,6 +1339,20 @@ function InventoryPage({ data, setData }) {
     if (!file) return;
     const base64 = await fileToBase64(file);
     setFormPhoto(base64);
+    setPhotoAnalyzing(true);
+    setPhotoSuggestion(null);
+    try {
+      const rawBase64 = base64.split(",")[1] || base64;
+      const result = await analyzeImage(rawBase64, file.type);
+      if (result) {
+        setPhotoSuggestion(result);
+        if (!formName) setFormName(result.itemName || "");
+        if (formCategory === "Electronics" && result.category) setFormCategory(result.category);
+        if (!formValue && result.estimatedValue) setFormValue(String(result.estimatedValue));
+        if (!formNotes && result.description) setFormNotes(result.description + (result.damageDetected ? " [DAMAGE DETECTED: " + result.damageDescription + "]" : ""));
+      }
+    } catch (err) { console.error("Photo analysis error:", err); }
+    finally { setPhotoAnalyzing(false); }
   };
 
   const handleSave = () => {
@@ -1551,6 +1589,26 @@ function InventoryPage({ data, setData }) {
               )}
               <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handlePhotoUpload} />
             </div>
+
+            {photoAnalyzing && (
+              <div style={{ padding: "12px 16px", borderRadius: 10, background: "var(--accent-light)", marginBottom: "1rem", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ animation: "spin 1s linear infinite", display: "inline-flex", color: "var(--accent)" }}><Icon name="loader" /></span>
+                <span style={{ fontSize: 13, color: "var(--accent)", fontWeight: 500 }}>AI is analyzing your photo...</span>
+                <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
+
+            {photoSuggestion && !photoAnalyzing && (
+              <div style={{ padding: "12px 16px", borderRadius: 10, background: "var(--accent-light)", border: "1.5px solid var(--accent)", marginBottom: "1rem" }}>
+                <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 600, color: "var(--accent)", textTransform: "uppercase", letterSpacing: 0.5 }}>AI detected</p>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{photoSuggestion.itemName} — ${photoSuggestion.estimatedValue?.toLocaleString() || "?"}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--text-secondary)" }}>{photoSuggestion.category} — Condition: {photoSuggestion.condition || "unknown"}</p>
+                {photoSuggestion.damageDetected && (
+                  <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "var(--danger-light)", fontSize: 12, color: "var(--danger)", fontWeight: 500 }}>Damage detected: {photoSuggestion.damageDescription}</div>
+                )}
+                <p style={{ margin: "6px 0 0", fontSize: 11, color: "var(--text-tertiary)" }}>Form fields have been auto-filled. Edit as needed.</p>
+              </div>
+            )}
 
             {/* Name */}
             <div style={{ marginBottom: "1rem" }}>
