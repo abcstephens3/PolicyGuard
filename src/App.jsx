@@ -1,5 +1,6 @@
 /* eslint-disable no-unused-vars */
-import { useState, useCallback, useRef } from "react";
+import * as API from "./api";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const STORAGE_KEY = "policyguard_data";
 
@@ -2330,16 +2331,89 @@ function PlaceholderPage({ title, icon, description }) {
 
 /* ─── Main App ─── */
 export default function App() {
-  const [data, setData] = useState(loadData);
+  const [data, setData] = useState({ documents: [], inventory: [], calendarEvents: [], analyses: {} });
   const [page, setPage] = useState("dashboard");
   const [pageArg, setPageArg] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [user, setUser] = useState(API.getStoredUser());
+  const [authMode, setAuthMode] = useState("login");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [authError, setAuthError] = useState(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [dataLoading, setDataLoading] = useState(false);
+  const navigate = useCallback((p, arg = null) => { setPage(p); setPageArg(arg); setSidebarOpen(false); }, []);
 
-  const navigate = useCallback((p, arg = null) => {
-    setPage(p);
-    setPageArg(arg);
-    setSidebarOpen(false);
+  const loadAllData = useCallback(async () => {
+    if (!API.isLoggedIn()) return;
+    setDataLoading(true);
+    try {
+      const [docs, items, events, analyses] = await Promise.all([
+        API.listDocuments(), API.listInventory(), API.listCalendarEvents(), API.listAnalyses()
+      ]);
+      const analysesMap = {};
+      analyses.forEach(a => { try { analysesMap[a.document_id] = JSON.parse(a.analysis_json); } catch(e){} });
+      setData({ documents: docs.map(d => ({...d, type: d.doc_type, policySubtype: d.policy_subtype, mimeType: d.mime_type, uploadedAt: d.uploaded_at})), inventory: items.map(i => ({...i, estimatedValue: i.estimated_value, purchasePrice: i.purchase_price, purchaseDate: i.purchase_date, serialNumber: i.serial_number, photoPath: i.photo_path, receiptId: i.receipt_id, createdAt: i.created_at, updatedAt: i.updated_at})), calendarEvents: events.map(e => ({...e, eventType: e.event_type, eventDate: e.event_date, reminderDays: e.reminder_days, sourceDocument: e.source_document, createdAt: e.created_at})), analyses: analysesMap });
+    } catch(e) { console.error("Failed to load data:", e); }
+    finally { setDataLoading(false); }
   }, []);
+
+  useEffect(() => { if (API.isLoggedIn()) loadAllData(); }, [loadAllData]);
+
+  const handleAuth = async () => {
+    setAuthError(null); setAuthLoading(true);
+    try {
+      if (authMode === "register") { const r = await API.register(authEmail, authName, authPass); setUser(r.user); }
+      else { const r = await API.login(authEmail, authPass); setUser(r.user); }
+      loadAllData();
+    } catch(e) { setAuthError(e.message); }
+    finally { setAuthLoading(false); }
+  };
+
+  const handleLogout = () => { API.logout(); setUser(null); setData({ documents: [], inventory: [], calendarEvents: [], analyses: {} }); };
+
+  if (!API.isLoggedIn() || !user) {
+    return (
+      <>
+        <style>{`:root{--accent:#1a6b4e;--accent-light:#e8f5ee;--bg-primary:#ffffff;--bg-secondary:#f7f8f6;--bg-tertiary:#eef0ec;--text-primary:#1a1c1a;--text-secondary:#5a5f5a;--text-tertiary:#8a8f8a;--border:#dde0da;--warning:#9a6b15;--warning-light:#fdf5e6;--danger:#b53030;--danger-light:#fde8e8}@media(prefers-color-scheme:dark){:root{--accent:#4dab82;--accent-light:#1a3328;--bg-primary:#1a1c1a;--bg-secondary:#232623;--bg-tertiary:#2c302c;--text-primary:#e8ebe8;--text-secondary:#a0a5a0;--text-tertiary:#6a6f6a;--border:#3a3e3a;--danger:#e05050;--danger-light:#301515}}*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-tertiary);color:var(--text-primary)}`}</style>
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "2rem" }}>
+          <div style={{ background: "var(--bg-primary)", borderRadius: 20, padding: "2.5rem", width: "100%", maxWidth: 400, border: "1.5px solid var(--border)" }}>
+            <div style={{ textAlign: "center", marginBottom: "2rem" }}>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              </div>
+              <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--text-primary)" }}>PolicyGuard</h1>
+              <p style={{ margin: "6px 0 0", fontSize: 14, color: "var(--text-secondary)" }}>{authMode === "register" ? "Create your account" : "Sign in to your account"}</p>
+            </div>
+            {authError && <div style={{ padding: "10px 14px", borderRadius: 10, background: "var(--danger-light)", marginBottom: "1rem", fontSize: 13, color: "var(--danger)" }}>{authError}</div>}
+            {authMode === "register" && <div style={{ marginBottom: "1rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Name</label><input value={authName} onChange={e => setAuthName(e.target.value)} placeholder="Your name" style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box" }} /></div>}
+            <div style={{ marginBottom: "1rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Email</label><input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box" }} /></div>
+            <div style={{ marginBottom: "1.5rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Password</label><input type="password" value={authPass} onChange={e => setAuthPass(e.target.value)} onKeyDown={e => e.key === "Enter" && handleAuth()} placeholder="Your password" style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box" }} /></div>
+            <button onClick={handleAuth} disabled={authLoading || !authEmail || !authPass} style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: "var(--accent)", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer", marginBottom: "1rem" }}>{authLoading ? "Please wait..." : authMode === "register" ? "Create account" : "Sign in"}</button>
+            <p style={{ textAlign: "center", fontSize: 13, color: "var(--text-secondary)" }}>{authMode === "register" ? "Already have an account? " : "Need an account? "}<button onClick={() => { setAuthMode(authMode === "register" ? "login" : "register"); setAuthError(null); }} style={{ background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 600, fontSize: 13 }}>{authMode === "register" ? "Sign in" : "Register"}</button></p>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (dataLoading) {
+    return (
+      <>
+        <style>{`:root{--accent:#1a6b4e;--bg-tertiary:#eef0ec;--text-primary:#1a1c1a;--text-secondary:#5a5f5a}@media(prefers-color-scheme:dark){:root{--accent:#4dab82;--bg-tertiary:#2c302c;--text-primary:#e8ebe8;--text-secondary:#a0a5a0}}*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg-tertiary)}`}</style>
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--accent)", display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 16, animation: "pulse 1.5s infinite" }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <p style={{ fontSize: 15, color: "var(--text-secondary)" }}>Loading your data...</p>
+            <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}`}</style>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   const NAV = [
     { id: "dashboard", label: "Dashboard", icon: "home" },
@@ -2477,10 +2551,10 @@ export default function App() {
           ))}
         </div>
 
-        <div style={{ padding: "1rem 0.75rem 0", borderTop: "1px solid var(--border)", marginTop: "1rem" }}>
-          <p style={{ fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
-            PolicyGuard helps you understand insurance policy language and document your property. This is not legal or insurance advice.
-          </p>
+        <div style={{ padding: "0.75rem", borderTop: "1px solid var(--border)", marginTop: "1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--accent-light)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{user?.name?.[0]?.toUpperCase() || "U"}</div><span style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500 }}>{user?.name || "User"}</span></div>
+          <button onClick={handleLogout} style={{ width: "100%", padding: "8px", borderRadius: 8, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>Sign out</button>
+          <p style={{ fontSize: 10, color: "var(--text-tertiary)", lineHeight: 1.4, marginTop: 8 }}>Not legal or insurance advice.</p>
         </div>
       </nav>
 
