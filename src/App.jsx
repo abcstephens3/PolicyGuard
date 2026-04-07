@@ -1594,6 +1594,278 @@ function InventoryPage({ data, setData }) {
 }
 
 /* ─── Placeholder Pages ─── */
+
+/* ─── Semantic Search API Call ─── */
+async function semanticSearchCall(query, data) {
+  const apiKey = localStorage.getItem("policyguard_api_key") || "";
+  if (!apiKey) throw new Error("API key not set.");
+  let context = "User's PolicyGuard data:\n\nDOCUMENTS:\n";
+  data.documents.forEach(d => { context += "- " + d.label + " (" + d.type + ", uploaded " + d.uploadedAt + ")\n"; });
+  context += "\nPOLICY ANALYSES:\n";
+  Object.entries(data.analyses).forEach(([docId, analysis]) => {
+    const doc = data.documents.find(d => d.id === docId);
+    context += "\nPolicy: " + (doc ? doc.label : docId) + "\n" + JSON.stringify(analysis, null, 1) + "\n";
+  });
+  context += "\nINVENTORY ITEMS:\n";
+  data.inventory.forEach(item => { context += "- " + item.name + " (" + item.room + ", " + item.category + ", $" + (item.estimatedValue || 0) + ")\n"; });
+  context += "\nCALENDAR EVENTS:\n";
+  data.calendarEvents.forEach(ev => { context += "- " + ev.title + " (" + ev.eventType + ", " + ev.eventDate + ")\n"; });
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500,
+      messages: [{ role: "user", content: context + "\n\nThe user is searching for: \"" + query + "\"\n\nSearch across all their documents, policy analyses, inventory items, and calendar events. Return a helpful answer that references specific items from their data. Be specific." }],
+    }),
+  });
+  if (!response.ok) throw new Error("Search failed.");
+  const result = await response.json();
+  return result.content.map(c => c.text || "").join("");
+}
+ 
+/* ─── Search Everything Page ─── */
+function SearchPage({ data }) {
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState([]);
+  const [error, setError] = useState(null);
+  const handleSearch = async () => {
+    if (!query.trim()) return;
+    setSearching(true); setError(null);
+    try { const answer = await semanticSearchCall(query, data); setResults(prev => [...prev, { q: query, a: answer }]); setQuery(""); }
+    catch (e) { setError(e.message); } finally { setSearching(false); }
+  };
+  return (
+    <div>
+      <h1 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "var(--text-primary)" }}>Search everything</h1>
+      <p style={{ margin: "0 0 1.5rem", fontSize: 14, color: "var(--text-secondary)" }}>Search across all your policies, inventory, receipts, and deadlines</p>
+      <div style={{ display: "flex", gap: 8, marginBottom: "1.5rem" }}>
+        <div style={{ position: "relative", flex: 1 }}>
+          <div style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-tertiary)" }}><Icon name="search" size={16} /></div>
+          <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && handleSearch()} placeholder="e.g. What does my policy cover for water damage?" style={{ width: "100%", padding: "12px 14px 12px 40px", borderRadius: 12, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box" }} />
+        </div>
+        <button onClick={handleSearch} disabled={searching || !query.trim()} style={{ padding: "12px 24px", borderRadius: 12, border: "none", background: searching || !query.trim() ? "var(--border)" : "var(--accent)", color: searching || !query.trim() ? "var(--text-tertiary)" : "#fff", fontSize: 14, fontWeight: 600, cursor: searching ? "default" : "pointer", whiteSpace: "nowrap" }}>{searching ? "Searching..." : "Search"}</button>
+      </div>
+      {error && <div style={{ padding: "12px 16px", borderRadius: 12, background: "var(--danger-light)", marginBottom: "1rem", fontSize: 13, color: "var(--danger)" }}>{error}</div>}
+      {results.length === 0 && !searching && (
+        <div>
+          <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 500, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: 0.5 }}>Try searching for</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {["What is my deductible?", "Show all kitchen items", "When does my policy renew?", "What is not covered?", "Find roof-related items and coverage"].map((q, i) => (
+              <button key={i} onClick={() => setQuery(q)} style={{ padding: "8px 14px", borderRadius: 10, fontSize: 13, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", cursor: "pointer" }}>{q}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: results.length ? "1rem" : 0 }}>
+        {results.map((r, i) => (
+          <div key={i}>
+            <div style={{ display: "flex", gap: 10, marginBottom: 8 }}>
+              <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--accent-light)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Icon name="search" size={14} /></div>
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500, color: "var(--text-primary)", paddingTop: 4 }}>{r.q}</p>
+            </div>
+            <div style={{ marginLeft: 38, padding: "14px 16px", borderRadius: 12, background: "var(--bg-secondary)", fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{r.a}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+ 
+/* ─── Claim Report Generator ─── */
+function ClaimReportPage({ data }) {
+  const [selectedPolicy, setSelectedPolicy] = useState(null);
+  const [lossDescription, setLossDescription] = useState("");
+  const [lossDate, setLossDate] = useState("");
+  const [selectedItems, setSelectedItems] = useState([]);
+  const [showReport, setShowReport] = useState(false);
+  const policies = data.documents.filter(d => d.type === "policy" && d.status === "analyzed");
+  const analysis = selectedPolicy ? data.analyses[selectedPolicy] : null;
+  const toggleItem = (id) => setSelectedItems(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  const affectedItems = data.inventory.filter(i => selectedItems.includes(i.id));
+  const totalLoss = affectedItems.reduce((sum, i) => sum + (i.estimatedValue || 0), 0);
+ 
+  if (showReport) {
+    return (
+      <div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.5rem" }}>
+          <button onClick={() => setShowReport(false)} style={{ background: "none", border: "1.5px solid var(--border)", borderRadius: 10, padding: "8px 16px", cursor: "pointer", color: "var(--text-secondary)", fontSize: 13 }}>Back to editor</button>
+          <button onClick={() => window.print()} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 10, background: "var(--accent)", color: "#fff", border: "none", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Print / Save PDF</button>
+        </div>
+        <div style={{ background: "var(--bg-primary)", border: "1.5px solid var(--border)", borderRadius: 16, padding: "2rem", maxWidth: 800, marginInline: "auto" }}>
+          <div style={{ textAlign: "center", marginBottom: "2rem", paddingBottom: "1.5rem", borderBottom: "2px solid var(--accent)" }}>
+            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--accent)" }}>Insurance Claim Report</h1>
+            <p style={{ margin: "8px 0 0", fontSize: 14, color: "var(--text-secondary)" }}>Generated by PolicyGuard on {formatDate(new Date().toISOString())}</p>
+          </div>
+          <div style={{ marginBottom: "2rem" }}>
+            <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 600, color: "var(--text-primary)" }}>Loss Information</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: 0.5 }}>Date of loss</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{lossDate ? formatDate(lossDate) : "Not specified"}</p></div>
+              <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase", letterSpacing: 0.5 }}>Total estimated loss</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>${totalLoss.toLocaleString()}</p></div>
+            </div>
+            <p style={{ margin: "12px 0 0", fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.6 }}>{lossDescription || "No description provided"}</p>
+          </div>
+          {analysis && (
+            <div style={{ marginBottom: "2rem" }}>
+              <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 600, color: "var(--text-primary)" }}>Policy Information</h2>
+              <div style={{ background: "var(--bg-secondary)", borderRadius: 12, padding: "1rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  {[{l:"Insurer",v:analysis.policyOverview?.insurer},{l:"Policy number",v:analysis.policyOverview?.policyNumber},{l:"Policy type",v:analysis.policyOverview?.policyType},{l:"Effective dates",v:analysis.policyOverview?.effectiveDates}].map(x => (
+                    <div key={x.l}><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>{x.l}</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{x.v || "N/A"}</p></div>
+                  ))}
+                </div>
+              </div>
+              {analysis.coverages && <div style={{ marginTop: 12 }}><p style={{ margin: "0 0 8px", fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Relevant coverages:</p>{analysis.coverages.map((c, i) => (<div key={i} style={{ padding: "8px 12px", background: "var(--bg-secondary)", borderRadius: 8, marginBottom: 6, display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 13 }}>{c.name}</span><span style={{ fontSize: 13, fontWeight: 500, color: "var(--accent)" }}>{c.limit || "See policy"}</span></div>))}</div>}
+            </div>
+          )}
+          <div style={{ marginBottom: "2rem" }}>
+            <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 600, color: "var(--text-primary)" }}>Affected Items ({affectedItems.length})</h2>
+            <div style={{ border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "10px 14px", background: "var(--bg-secondary)", fontSize: 11, fontWeight: 600, color: "var(--text-tertiary)", textTransform: "uppercase" }}><span>Item</span><span>Room</span><span>Purchase</span><span>Value</span></div>
+              {affectedItems.map(item => (<div key={item.id} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: "1px solid var(--border)", fontSize: 13 }}><span style={{ fontWeight: 500 }}>{item.name}</span><span style={{ color: "var(--text-secondary)" }}>{item.room}</span><span style={{ color: "var(--text-secondary)" }}>{item.purchasePrice ? "$" + item.purchasePrice.toLocaleString() : "-"}</span><span style={{ fontWeight: 500, color: "var(--accent)" }}>${(item.estimatedValue || 0).toLocaleString()}</span></div>))}
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "10px 14px", borderTop: "2px solid var(--border)", background: "var(--bg-secondary)", fontSize: 13, fontWeight: 600 }}><span>Total</span><span></span><span></span><span style={{ color: "var(--accent)" }}>${totalLoss.toLocaleString()}</span></div>
+            </div>
+          </div>
+          {analysis?.claimsProcess && (
+            <div style={{ marginBottom: "2rem" }}>
+              <h2 style={{ margin: "0 0 12px", fontSize: 18, fontWeight: 600, color: "var(--text-primary)" }}>Claims Process</h2>
+              {analysis.claimsProcess.steps?.map((step, i) => (<div key={i} style={{ display: "flex", gap: 12, marginBottom: 8 }}><div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--accent)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{i + 1}</div><p style={{ margin: 0, fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5, paddingTop: 3 }}>{step}</p></div>))}
+              {analysis.claimsProcess.timeRequirements && <div style={{ marginTop: 12, padding: "10px 14px", background: "var(--warning-light)", borderRadius: 8 }}><p style={{ margin: 0, fontSize: 13, color: "var(--warning)" }}>Filing deadline: {analysis.claimsProcess.timeRequirements}</p></div>}
+            </div>
+          )}
+          <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text-tertiary)", textAlign: "center" }}><p style={{ margin: 0 }}>Generated by PolicyGuard for documentation purposes. Not legal or insurance advice.</p></div>
+        </div>
+      </div>
+    );
+  }
+ 
+  return (
+    <div>
+      <h1 style={{ margin: "0 0 4px", fontSize: 24, fontWeight: 700, color: "var(--text-primary)" }}>Claim report generator</h1>
+      <p style={{ margin: "0 0 1.5rem", fontSize: 14, color: "var(--text-secondary)" }}>Create a documented claim report combining your policy, inventory, and loss details</p>
+      {policies.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "3rem 1rem", color: "var(--text-tertiary)" }}><Icon name="clipboard" size={40} /><p style={{ margin: "8px 0 0", fontSize: 15, fontWeight: 500 }}>No analyzed policies yet</p><p style={{ margin: "4px 0", fontSize: 13 }}>Upload and analyze a policy first</p></div>
+      ) : (
+        <>
+          <div style={{ marginBottom: "1.5rem" }}>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 8 }}>Select policy</label>
+            {policies.map(doc => (<button key={doc.id} onClick={() => setSelectedPolicy(doc.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: selectedPolicy === doc.id ? "var(--accent-light)" : "var(--bg-primary)", border: "1.5px solid " + (selectedPolicy === doc.id ? "var(--accent)" : "var(--border)"), borderRadius: 12, cursor: "pointer", textAlign: "left", width: "100%", marginBottom: 8 }}><Icon name="shield" /><span style={{ fontSize: 14, fontWeight: 500, color: "var(--text-primary)" }}>{doc.label}</span></button>))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: "1.5rem" }}>
+            <div><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Date of loss</label><input type="date" value={lossDate} onChange={e => setLossDate(e.target.value)} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box" }} /></div>
+            <div style={{ gridColumn: "1 / -1" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Description of loss</label><textarea value={lossDescription} onChange={e => setLossDescription(e.target.value)} placeholder="Describe what happened..." rows={3} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} /></div>
+          </div>
+          {data.inventory.length > 0 && (
+            <div style={{ marginBottom: "1.5rem" }}>
+              <label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 8 }}>Select affected items</label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+                {data.inventory.map(item => (<button key={item.id} onClick={() => toggleItem(item.id)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1.5px solid " + (selectedItems.includes(item.id) ? "var(--accent)" : "var(--border)"), borderRadius: 10, background: selectedItems.includes(item.id) ? "var(--accent-light)" : "var(--bg-primary)", cursor: "pointer", textAlign: "left" }}>
+                  {selectedItems.includes(item.id) ? <Icon name="check" /> : <Icon name="box" />}
+                  <div style={{ flex: 1, minWidth: 0 }}><p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</p><p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--text-tertiary)" }}>{item.room} - ${(item.estimatedValue || 0).toLocaleString()}</p></div>
+                </button>))}
+              </div>
+              {selectedItems.length > 0 && <p style={{ margin: "8px 0 0", fontSize: 14, fontWeight: 600, color: "var(--accent)" }}>{selectedItems.length} items - ${totalLoss.toLocaleString()} total</p>}
+            </div>
+          )}
+          <button onClick={() => setShowReport(true)} disabled={!selectedPolicy} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", padding: "14px", borderRadius: 12, border: "none", background: selectedPolicy ? "var(--accent)" : "var(--border)", color: selectedPolicy ? "#fff" : "var(--text-tertiary)", fontSize: 15, fontWeight: 600, cursor: selectedPolicy ? "pointer" : "default" }}><Icon name="clipboard" /> Generate claim report</button>
+        </>
+      )}
+    </div>
+  );
+}
+ 
+/* ─── Disaster Mode Page ─── */
+function DisasterModePage({ data, setData, onNavigate }) {
+  const [step, setStep] = useState(0);
+  const [lossType, setLossType] = useState("");
+  const [lossDate, setLossDate] = useState("");
+  const [lossDesc, setLossDesc] = useState("");
+  const [damagePhotos, setDamagePhotos] = useState([]);
+  const [affectedRooms, setAffectedRooms] = useState([]);
+  const photoRef = useRef(null);
+  const policies = data.documents.filter(d => d.type === "policy" && d.status === "analyzed");
+  const LOSS_TYPES = ["Fire", "Water damage", "Storm / Wind", "Theft / Burglary", "Vandalism", "Vehicle damage", "Other"];
+  const roomsWithItems = [...new Set(data.inventory.map(i => i.room))];
+  const affectedItems = data.inventory.filter(i => affectedRooms.includes(i.room));
+  const totalLoss = affectedItems.reduce((sum, i) => sum + (i.estimatedValue || 0), 0);
+ 
+  const handlePhotoUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      const base64 = await fileToBase64(file);
+      setDamagePhotos(prev => [...prev, { name: file.name, data: base64 }]);
+      const doc = { id: Date.now() + "_" + Math.random().toString(36).slice(2, 8), name: file.name, type: "photo", label: "Damage photo - " + (lossType || "loss") + " - " + file.name, size: file.size, mimeType: file.type, data: base64, uploadedAt: new Date().toISOString(), status: "stored" };
+      const next = { ...data, documents: [...data.documents, doc] };
+      setData(next); saveData(next);
+    }
+  };
+ 
+  const steps = [{ title: "What happened?", icon: "alert" }, { title: "Document damage", icon: "camera" }, { title: "Affected areas", icon: "box" }, { title: "Review", icon: "clipboard" }];
+ 
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: "1.5rem" }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--danger)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}><Icon name="alert" /></div>
+        <div><h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: "var(--text-primary)" }}>Disaster mode</h1><p style={{ margin: "2px 0 0", fontSize: 14, color: "var(--text-secondary)" }}>Guided workflow to document a loss and prepare your claim</p></div>
+      </div>
+      {policies.length === 0 && <div style={{ padding: "14px 18px", borderRadius: 12, background: "var(--warning-light)", border: "1.5px solid var(--warning)", marginBottom: "1.5rem", fontSize: 13, color: "var(--warning)" }}>Tip: Upload and analyze your policy first for a stronger report.</div>}
+      <div style={{ display: "flex", gap: 4, marginBottom: "2rem" }}>{steps.map((s, i) => (<div key={i} style={{ flex: 1, textAlign: "center" }}><div style={{ height: 4, borderRadius: 2, background: i <= step ? "var(--accent)" : "var(--border)", marginBottom: 8 }} /><p style={{ margin: 0, fontSize: 11, color: i <= step ? "var(--accent)" : "var(--text-tertiary)", fontWeight: i === step ? 600 : 400 }}>{s.title}</p></div>))}</div>
+ 
+      {step === 0 && (<div>
+        <div style={{ marginBottom: "1.5rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 8 }}>Type of loss</label><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{LOSS_TYPES.map(t => (<button key={t} onClick={() => setLossType(t)} style={{ padding: "10px 18px", borderRadius: 10, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1.5px solid " + (lossType === t ? "var(--danger)" : "var(--border)"), background: lossType === t ? "var(--danger-light)" : "var(--bg-primary)", color: lossType === t ? "var(--danger)" : "var(--text-secondary)" }}>{t}</button>))}</div></div>
+        <div style={{ marginBottom: "1.5rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>When did it happen?</label><input type="date" value={lossDate} onChange={e => setLossDate(e.target.value)} style={{ padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none" }} /></div>
+        <div style={{ marginBottom: "1.5rem" }}><label style={{ display: "block", fontSize: 13, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Describe what happened</label><textarea value={lossDesc} onChange={e => setLossDesc(e.target.value)} placeholder="Provide as much detail as possible..." rows={4} style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-primary)", fontSize: 14, outline: "none", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} /></div>
+        <button onClick={() => setStep(1)} disabled={!lossType} style={{ padding: "12px 24px", borderRadius: 10, border: "none", background: lossType ? "var(--accent)" : "var(--border)", color: lossType ? "#fff" : "var(--text-tertiary)", fontSize: 14, fontWeight: 600, cursor: lossType ? "pointer" : "default" }}>Next: Document damage</button>
+      </div>)}
+ 
+      {step === 1 && (<div>
+        <p style={{ margin: "0 0 1rem", fontSize: 14, color: "var(--text-secondary)" }}>Take photos of all damage. They are saved to your vault automatically.</p>
+        <button onClick={() => photoRef.current?.click()} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderRadius: 10, border: "2px dashed var(--border)", background: "var(--bg-secondary)", cursor: "pointer", color: "var(--text-secondary)", fontSize: 14, fontWeight: 500, marginBottom: "1rem", width: "100%" }}><Icon name="camera" /> Add damage photos</button>
+        <input ref={photoRef} type="file" accept="image/*" multiple style={{ display: "none" }} onChange={handlePhotoUpload} />
+        {damagePhotos.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8, marginBottom: "1rem" }}>{damagePhotos.map((p, i) => (<div key={i} style={{ borderRadius: 10, overflow: "hidden", height: 100 }}><img src={p.data} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /></div>))}</div>}
+        <p style={{ margin: "0 0 1rem", fontSize: 13, color: "var(--text-tertiary)" }}>{damagePhotos.length} photo{damagePhotos.length !== 1 ? "s" : ""} added</p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setStep(0)} style={{ padding: "12px 20px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", fontSize: 14, cursor: "pointer" }}>Back</button>
+          <button onClick={() => setStep(2)} style={{ padding: "12px 24px", borderRadius: 10, border: "none", background: "var(--accent)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Next: Affected areas</button>
+        </div>
+      </div>)}
+ 
+      {step === 2 && (<div>
+        <p style={{ margin: "0 0 1rem", fontSize: 14, color: "var(--text-secondary)" }}>Select which rooms were affected. Items in those rooms will be included in your claim.</p>
+        {roomsWithItems.length > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: "1rem" }}>{roomsWithItems.map(room => {
+            const roomItems = data.inventory.filter(i => i.room === room);
+            const sel = affectedRooms.includes(room);
+            return (<button key={room} onClick={() => setAffectedRooms(prev => prev.includes(room) ? prev.filter(r => r !== room) : [...prev, room])} style={{ padding: "10px 16px", borderRadius: 10, fontSize: 13, fontWeight: 500, cursor: "pointer", border: "1.5px solid " + (sel ? "var(--accent)" : "var(--border)"), background: sel ? "var(--accent-light)" : "var(--bg-primary)", color: sel ? "var(--accent)" : "var(--text-secondary)" }}>{sel && "\u2713 "}{room} ({roomItems.length} items)</button>);
+          })}</div>
+        ) : <p style={{ color: "var(--text-tertiary)", fontSize: 13, marginBottom: "1rem" }}>No inventory items yet.</p>}
+        {affectedRooms.length > 0 && <p style={{ margin: "0 0 1rem", fontSize: 14, fontWeight: 600, color: "var(--accent)" }}>{affectedItems.length} items - ${totalLoss.toLocaleString()} estimated</p>}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setStep(1)} style={{ padding: "12px 20px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", fontSize: 14, cursor: "pointer" }}>Back</button>
+          <button onClick={() => setStep(3)} style={{ padding: "12px 24px", borderRadius: 10, border: "none", background: "var(--accent)", color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Next: Review</button>
+        </div>
+      </div>)}
+ 
+      {step === 3 && (<div>
+        <div style={{ background: "var(--bg-secondary)", borderRadius: 14, padding: "1.5rem", marginBottom: "1.5rem" }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600, color: "var(--text-primary)" }}>Loss summary</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Type</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{lossType}</p></div>
+            <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Date</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{lossDate ? formatDate(lossDate) : "Not specified"}</p></div>
+            <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Photos</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{damagePhotos.length}</p></div>
+            <div><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Items</p><p style={{ margin: "4px 0", fontSize: 14, fontWeight: 500 }}>{affectedItems.length}</p></div>
+            <div style={{ gridColumn: "1 / -1" }}><p style={{ margin: 0, fontSize: 11, color: "var(--text-tertiary)", textTransform: "uppercase" }}>Estimated total loss</p><p style={{ margin: "4px 0", fontSize: 20, fontWeight: 700, color: "var(--accent)" }}>${totalLoss.toLocaleString()}</p></div>
+          </div>
+          {lossDesc && <p style={{ margin: "12px 0 0", fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>{lossDesc}</p>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setStep(2)} style={{ padding: "12px 20px", borderRadius: 10, border: "1.5px solid var(--border)", background: "var(--bg-primary)", color: "var(--text-secondary)", fontSize: 14, cursor: "pointer" }}>Back</button>
+          <button onClick={() => onNavigate("reports")} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "14px", borderRadius: 12, border: "none", background: "var(--accent)", color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" }}><Icon name="clipboard" /> Generate full claim report</button>
+        </div>
+      </div>)}
+    </div>
+  );
+}
+
 /* ─── Compliance Calendar Page ─── */
 const EVENT_TYPES = [
   { value: "renewal", label: "Policy renewal", color: "var(--accent)" },
