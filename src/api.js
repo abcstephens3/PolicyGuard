@@ -175,3 +175,16 @@ export async function listAnalyses() {
 export async function getAnalysis(docId) {
   return apiFetch("/api/analyses/" + docId);
 }
+
+// ─── AI Proxy ───
+export async function aiProxy(requestBody) {
+  try {
+    const result = await apiFetch("/api/ai/proxy", {
+      method: "POST",
+      body: JSON.stringify(requestBody),
+    });
+    return result;
+  } catch (e) {
+    return null;
+  }
+}

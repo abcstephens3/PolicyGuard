@@ -2,6 +2,28 @@
 import * as API from "./api";
 import { useState, useEffect, useCallback, useRef } from "react";
 
+async function callClaude(requestBody) {
+  const localKey = localStorage.getItem("policyguard_api_key") || "";
+  if (API.isLoggedIn()) {
+    try {
+      const result = await API.aiProxy(requestBody);
+      if (result && result.content) return result;
+    } catch (e) {}
+  }
+  if (!localKey) throw new Error("AI service unavailable. Add your API key in Settings or contact the administrator.");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": localKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify(requestBody),
+  });
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Invalid API key.");
+    if (response.status === 429) throw new Error("Rate limited. Please wait.");
+    throw new Error("AI request failed (" + response.status + ")");
+  }
+  return response.json();
+}
+
 const STORAGE_KEY = "policyguard_data";
 
 function loadData() {
@@ -146,188 +168,42 @@ function setApiKey(key) {
 
 /* ─── Claude API Call ─── */
 async function analyzePolicy(base64Data, mimeType, policySubtype) {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("API key not set. Go to Settings to add your Anthropic API key.");
-
   const policyTypeLabel = POLICY_SUBTYPES.find(p => p.value === policySubtype)?.label || "property and casualty";
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "document",
-              source: {
-                type: "base64",
-                media_type: mimeType || "application/pdf",
-                data: base64Data,
-              },
-            },
-            {
-              type: "text",
-              text: `You are analyzing a ${policyTypeLabel} insurance policy to help a policyholder understand their coverage in plain language. This person may need to file a claim and wants to understand what to expect.
-
-Analyze this policy document and return a JSON response with exactly this structure (no markdown, no backticks, just raw JSON):
-
-{
-  "policyOverview": {
-    "insurer": "name of insurance company",
-    "policyType": "homeowners/auto/renters/etc",
-    "policyNumber": "if found",
-    "effectiveDates": "policy period if found",
-    "summary": "2-3 sentence plain language summary of what this policy covers"
-  },
-  "coverages": [
-    {
-      "name": "Coverage name (e.g. Dwelling Coverage, Liability, Collision)",
-      "limit": "dollar limit if stated",
-      "deductible": "deductible amount if stated",
-      "plainExplanation": "1-2 sentences explaining what this coverage actually pays for in everyday language",
-      "claimExample": "A brief example of when a policyholder would use this coverage"
-    }
-  ],
-  "keyDefinitions": [
-    {
-      "term": "important policy term",
-      "policyDefinition": "how the policy defines it",
-      "plainMeaning": "what it actually means in everyday language"
-    }
-  ],
-  "exclusions": [
-    {
-      "item": "what is NOT covered",
-      "plainExplanation": "why this matters to the policyholder"
-    }
-  ],
-  "claimsProcess": {
-    "steps": [
-      "Step 1 description in plain language",
-      "Step 2 description in plain language"
-    ],
-    "timeRequirements": "any deadlines for filing or reporting claims",
-    "contactInfo": "claims contact info if found in policy",
-    "importantNotes": "anything else the policyholder should know about filing"
-  },
-  "importantDates": [
-    {
-      "event": "what the date is for",
-      "date": "the date or timeframe",
-      "action": "what the policyholder should do"
-    }
-  ],
-  "warnings": [
-    "Any surprising limitations, conditions, or gotchas the policyholder should know about"
-  ]
-}
-
-Focus on being helpful to someone who might be filing a claim. Define insurance jargon in plain language. If you cannot find specific information for a field, use "Not specified in policy" rather than making something up.`,
-            },
-          ],
-        },
-      ],
-    }),
+  const result = await callClaude({
+    model: "claude-sonnet-4-20250514", max_tokens: 4096,
+    messages: [{ role: "user", content: [
+      { type: "document", source: { type: "base64", media_type: mimeType || "application/pdf", data: base64Data } },
+      { type: "text", text: "You are analyzing a " + policyTypeLabel + " insurance policy to help a policyholder understand their coverage in plain language. This person may need to file a claim and wants to understand what to expect.\n\nAnalyze this policy document and return a JSON response with exactly this structure (no markdown, no backticks, just raw JSON):\n\n{\n  \"policyOverview\": { \"insurer\": \"name\", \"policyType\": \"type\", \"policyNumber\": \"if found\", \"effectiveDates\": \"period\", \"summary\": \"2-3 sentence plain language summary\" },\n  \"coverages\": [{ \"name\": \"Coverage name\", \"limit\": \"dollar limit\", \"deductible\": \"amount\", \"plainExplanation\": \"1-2 sentences everyday language\", \"claimExample\": \"brief example\" }],\n  \"keyDefinitions\": [{ \"term\": \"term\", \"policyDefinition\": \"policy definition\", \"plainMeaning\": \"everyday meaning\" }],\n  \"exclusions\": [{ \"item\": \"what is NOT covered\", \"plainExplanation\": \"why this matters\" }],\n  \"claimsProcess\": { \"steps\": [\"Step 1\", \"Step 2\"], \"timeRequirements\": \"deadlines\", \"contactInfo\": \"if found\", \"importantNotes\": \"other info\" },\n  \"importantDates\": [{ \"event\": \"what\", \"date\": \"when\", \"action\": \"what to do\" }],\n  \"warnings\": [\"surprising limitations or gotchas\"]\n}\n\nFocus on helping someone who might file a claim. Define jargon in plain language. Use \"Not specified in policy\" for missing info." }
+    ]}],
   });
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    if (response.status === 401) throw new Error("Invalid API key. Check your key in Settings.");
-    if (response.status === 429) throw new Error("Rate limited. Please wait a moment and try again.");
-    throw new Error(`API error (${response.status}): ${errBody}`);
-  }
-
-  const result = await response.json();
   const text = result.content.map(c => c.text || "").join("");
-  const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-
-  try {
-    return JSON.parse(cleaned);
-  } catch (e) {
-    throw new Error("Could not parse analysis results. The policy may be too complex or unreadable. Try a clearer PDF.");
-  }
+  try { return JSON.parse(text.replace(/\`\`\`json\s*/g, "").replace(/\`\`\`\s*/g, "").trim()); }
+  catch (e) { throw new Error("Could not parse analysis results. Try a clearer PDF."); }
 }
 
-/* ─── Ask a question about the policy ─── */
+/* ─── AI Functions (all routed through backend) ─── */
 async function analyzeImage(base64Data, mimeType) {
-  const apiKey = localStorage.getItem("policyguard_api_key") || "";
-  if (!apiKey) return null;
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 1000,
-        messages: [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: mimeType || "image/jpeg", data: base64Data } },
-          { type: "text", text: "Analyze this image for a home inventory system. Return ONLY raw JSON (no markdown, no backticks):\n{\n  \"itemName\": \"what the item is\",\n  \"category\": \"one of: Electronics, Furniture, Appliances, Clothing, Jewelry, Tools, Sports equipment, Musical instruments, Art / Collectibles, Kitchenware, Bedding / Linens, Toys / Games, Other\",\n  \"estimatedValue\": number (current market value in USD, your best estimate),\n  \"condition\": \"new/good/fair/poor/damaged\",\n  \"damageDetected\": true or false,\n  \"damageDescription\": \"description of any damage seen, or empty string\",\n  \"description\": \"brief description including brand/model if visible\"\n}" }
-        ]}],
-      }),
+    const result = await callClaude({
+      model: "claude-sonnet-4-20250514", max_tokens: 1000,
+      messages: [{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: mimeType || "image/jpeg", data: base64Data } },
+        { type: "text", text: "Analyze this image for a home inventory system. Return ONLY raw JSON (no markdown, no backticks):\n{\n  \"itemName\": \"what the item is\",\n  \"category\": \"one of: Electronics, Furniture, Appliances, Clothing, Jewelry, Tools, Sports equipment, Musical instruments, Art / Collectibles, Kitchenware, Bedding / Linens, Toys / Games, Other\",\n  \"estimatedValue\": number (current market value in USD),\n  \"condition\": \"new/good/fair/poor/damaged\",\n  \"damageDetected\": true or false,\n  \"damageDescription\": \"description of any damage seen, or empty string\",\n  \"description\": \"brief description including brand/model if visible\"\n}" }
+      ]}],
     });
-    if (!response.ok) return null;
-    const result = await response.json();
     const text = result.content.map(c => c.text || "").join("");
     return JSON.parse(text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim());
   } catch (e) { console.error("Image analysis failed:", e); return null; }
 }
 
 async function askPolicyQuestion(base64Data, mimeType, question, analysisJson) {
-  const apiKey = getApiKey();
-  if (!apiKey) throw new Error("API key not set.");
-
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "document",
-              source: {
-                type: "base64",
-                media_type: mimeType || "application/pdf",
-                data: base64Data,
-              },
-            },
-            {
-              type: "text",
-              text: `You are a helpful insurance policy interpreter. A policyholder has uploaded their insurance policy and has this question:
-
-"${question}"
-
-Here is the prior analysis of their policy for context:
-${JSON.stringify(analysisJson, null, 2)}
-
-Answer their question in plain, everyday language. Reference specific parts of their policy when possible. If the answer involves filing a claim, explain the practical steps. If the policy doesn't address their question, say so clearly.
-
-Keep your answer concise but thorough — 2-4 paragraphs maximum. Do not use legal jargon without explaining it.`,
-            },
-          ],
-        },
-      ],
-    }),
+  const result = await callClaude({
+    model: "claude-sonnet-4-20250514", max_tokens: 1500,
+    messages: [{ role: "user", content: [
+      { type: "document", source: { type: "base64", media_type: mimeType || "application/pdf", data: base64Data } },
+      { type: "text", text: "You are a helpful insurance policy interpreter. A policyholder has this question:\n\n\"" + question + "\"\n\nPrior analysis:\n" + JSON.stringify(analysisJson, null, 2) + "\n\nAnswer in plain everyday language. Reference specific policy parts. Keep to 2-4 paragraphs." }
+    ]}],
   });
-
-  if (!response.ok) throw new Error("Failed to get answer. Please try again.");
-  const result = await response.json();
   return result.content.map(c => c.text || "").join("");
 }
 
@@ -1703,10 +1579,8 @@ function InventoryPage({ data, setData }) {
 
 /* ─── Semantic Search API Call ─── */
 async function semanticSearchCall(query, data) {
-  const apiKey = localStorage.getItem("policyguard_api_key") || "";
-  if (!apiKey) throw new Error("API key not set.");
   let context = "User's PolicyGuard data:\n\nDOCUMENTS:\n";
-  data.documents.forEach(d => { context += "- " + d.label + " (" + d.type + ", uploaded " + d.uploadedAt + ")\n"; });
+  data.documents.forEach(d => { context += "- " + d.label + " (" + (d.type || d.doc_type) + ")\n"; });
   context += "\nPOLICY ANALYSES:\n";
   Object.entries(data.analyses).forEach(([docId, analysis]) => {
     const doc = data.documents.find(d => d.id === docId);
@@ -1715,16 +1589,10 @@ async function semanticSearchCall(query, data) {
   context += "\nINVENTORY ITEMS:\n";
   data.inventory.forEach(item => { context += "- " + item.name + " (" + item.room + ", " + item.category + ", $" + (item.estimatedValue || 0) + ")\n"; });
   context += "\nCALENDAR EVENTS:\n";
-  data.calendarEvents.forEach(ev => { context += "- " + ev.title + " (" + ev.eventType + ", " + ev.eventDate + ")\n"; });
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500,
-      messages: [{ role: "user", content: context + "\n\nThe user is searching for: \"" + query + "\"\n\nSearch across all their documents, policy analyses, inventory items, and calendar events. Return a helpful answer that references specific items from their data. Be specific." }],
-    }),
+  data.calendarEvents.forEach(ev => { context += "- " + ev.title + " (" + (ev.eventType || ev.event_type) + ", " + (ev.eventDate || ev.event_date) + ")\n"; });
+  const result = await callClaude({ model: "claude-sonnet-4-20250514", max_tokens: 1500,
+    messages: [{ role: "user", content: context + "\n\nThe user is searching for: \"" + query + "\"\n\nSearch across all their documents, policy analyses, inventory items, and calendar events. Return a helpful answer that references specific items from their data. Be specific." }],
   });
-  if (!response.ok) throw new Error("Search failed.");
-  const result = await response.json();
   return result.content.map(c => c.text || "").join("");
 }
  
